@@ -135,3 +135,21 @@ key feutures
 | **Type annotations & docstrings** | All functions have clear type hints and detailed docstrings including arguments, return values, examples, and exceptions.                                                                                                                       |
 | **Vectorized implementation**     | All DataFrame operations are vectorized for efficiency and scalability.                                                                                                                                                                         |
 | **Test-friendly features**        | `retry` accepts an optional `sleep_func` to allow mocking delays during unit testing.                                                                                                                                                           |
+
+Architecture
+
+```mermaid
+flowchart TD
+    A["Config Module\n• API Keys & Secret\n• Cache Dir\n• Max Requests & Safety Margin\n• Retry Attempts & Delay"] --> B["BinanceFetcher Module\n• Fetch OHLC & Trades\n• Batch Processing\n• Merge Candle & Trades\n• Caching\n• Validation (strict_validation)\n• Progress Tracking\n• Retry & Signed Requests\n• Complete Dataset Fetching\n• Interval Handling"]
+
+    B --> C["DataValidator Module\n• Validate OHLC & Trades\n• Completeness Checks (missing candles, trade ID gaps)\n• Metrics & Issues\n• Interval-agnostic\n• Extreme Volatility Detection"]
+
+    B --> D["CacheManager Module\n• Save/Load OHLC & Trades\n• Metadata Management\n• Deterministic Cache Paths\n• LRU In-memory Cache\n• UTC-aware Timestamps\n• Error Handling & Logging"]
+
+    B --> E["ProgressTracker Module\n• Track Candle/Trade Progress\n• ETA Calculation\n• Console/Streamlit Display\n• Methods: update_candle_progress(), update_trade_progress(), set_totals(), _update_display(), finish()"]
+
+    B --> F["RateLimiter Module\n• Track Request Timestamps\n• Safety Margin\n• Auto Sleep\n• Rolling 1-min Window"]
+
+    B --> G["Utils Module\n• Retry Decorator (with backoff & test-friendly sleep)\n• Generate Signature\n• Compute Bid/Ask Volumes\n• Input Validation\n• Logging\n• Vectorized Implementation\n• Type Hints & Docstrings"]
+
+
