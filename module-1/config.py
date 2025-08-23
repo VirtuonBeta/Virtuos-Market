@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
+
 @dataclass
 class Config:
     # API settings
@@ -19,9 +20,3 @@ class Config:
     max_batch_size: int = 1000
     retry_attempts: int = 3
     retry_delay: float = 1.0  # seconds
-    
-    # Data validation
-    max_volatility_threshold: float = 0.5  # 50% price change in one candle
-    
-    # Cache settings
-    cache_version: str = "1.0"
