@@ -117,3 +117,21 @@ Key Features
 | **Complete Dataset Fetching** | Provides `fetch_complete_dataset()` to fetch OHLC and trades for a symbol, interval, and date range.                  |
 | **Interval Handling**         | Maps Binance interval strings to minutes for accurate candle processing.                                              |
 | **Error Handling**            | Optionally raises exceptions on validation errors via `strict_validation`.                                            |
+
+
+Utils Sub Module
+Overview
+
+utils.py contains utility functions that support the Binance data fetching pipeline. It provides robust, reusable helpers for retries, request signing, and trade volume computations.
+
+key feutures
+|Feature                       | Description                                                                                                                                                                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **retry decorator**               | Provides automatic retrying of function calls with configurable maximum attempts, delay, and exceptions. Supports exponential backoff and optional mockable sleep for testing. Logs retries and final errors.                                   |
+| **generate\_signature**           | Generates HMAC-SHA256 signature for Binance API requests. Validates inputs, sorts parameters before signing, and returns a hexadecimal signature string.                                                                                        |
+| **compute\_bid\_ask\_volumes**    | Computes bid and ask volumes from trade data in a DataFrame. Uses the `is_buyer_maker` flag to determine trade direction. Columns are initialized and added safely to avoid Pandas warnings. Supports custom column names and input validation. |
+| **Input validation**              | Functions check for proper types and required columns, raising exceptions if invalid.                                                                                                                                                           |
+| **Logging**                       | Uses `logging` to report retry attempts, wait times, and final errors.                                                                                                                                                                          |
+| **Type annotations & docstrings** | All functions have clear type hints and detailed docstrings including arguments, return values, examples, and exceptions.                                                                                                                       |
+| **Vectorized implementation**     | All DataFrame operations are vectorized for efficiency and scalability.                                                                                                                                                                         |
+| **Test-friendly features**        | `retry` accepts an optional `sleep_func` to allow mocking delays during unit testing.                                                                                                                                                           |
