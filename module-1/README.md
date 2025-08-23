@@ -53,3 +53,21 @@ Key Features
 | **Modular & Extensible** | Can be integrated before caching or processing. Additional checks and thresholds can be added easily.                                                                                       |
 
 
+CacheManager Sub Module
+Overview
+
+The CacheManager module is responsible for efficiently storing and retrieving OHLC and trade data from disk while maintaining metadata integrity and reducing redundant API calls.
+It supports Parquet-based caching, in-memory caching with LRU eviction, and UTC-aware timestamp handling, making it robust and fast for high-frequency data fetching.
+
+Key Features
+| Feature                       | Description                                                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **OHLC Caching**              | Save and load OHLC data per symbol, interval, and date range with metadata verification.                                    |
+| **Trade Caching**             | Save and load trade data per candle with metadata verification.                                                             |
+| **Metadata Management**       | Stores symbol, interval, start/end times, record count, cache version, cached\_at timestamp. Ensures cached data integrity. |
+| **In-memory LRU Cache**       | Keeps most recently accessed 10 datasets in memory to reduce disk reads. Evicts least recently used items automatically.    |
+| **UTC-aware timestamps**      | Ensures all datetime objects are timezone-aware to prevent cross-region inconsistencies.                                    |
+| **Error Handling & Logging**  | Logs errors during load/save, warns on version mismatches, and raises exceptions on save failures.                          |
+| **Deterministic Cache Paths** | `_get_cache_path()` constructs file paths systematically for OHLC and trades.                                               |
+| **Extensible**                | Can adjust memory cache size, implement retention policies, or add parallel-safe access in future.                          |
+
