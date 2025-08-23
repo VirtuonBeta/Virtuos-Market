@@ -14,6 +14,13 @@ from utils import retry, generate_signature, compute_bid_ask_volumes
 class BinanceDataFetcher:
     BASE_URL = "https://api.binance.com/api/v3"
     
+    # Mapping of Binance interval strings to minutes
+    INTERVAL_MAP = {
+        '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+        '1h': 60, '2h': 120, '4h': 240, '6h': 360, '8h': 480,
+        '12h': 720, '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200
+    }
+    
     def __init__(self, config: Config):
         self.config = config
         self.rate_limiter = RateLimiter(config)
@@ -71,7 +78,7 @@ class BinanceDataFetcher:
     
     def fetch_trades_batch(self, symbol: str, start_time: datetime, 
                           end_time: datetime, from_id: Optional[int] = None) -> pd.DataFrame:
-        """Fetch a batch of trade data"""
+        """Fetch a batch of aggregate trade data"""
         params = {
             "symbol": symbol,
             "startTime": int(start_time.timestamp() * 1000),
@@ -82,20 +89,30 @@ class BinanceDataFetcher:
         if from_id:
             params["fromId"] = from_id
         
-        data = self._make_request("historicalTrades", params, signed=True)
+        # Using aggTrades endpoint which doesn't require a signed request
+        data = self._make_request("aggTrades", params, signed=False)
         
-        # Convert to DataFrame
-        df = pd.DataFrame(data, columns=[
-            "id", "price", "quantity", "quote_quantity", "timestamp", 
-            "is_buyer_maker", "is_best_match"
-        ])
+        # Convert to DataFrame with single-letter column names from API
+        df = pd.DataFrame(data)
+        
+        # Rename columns to meaningful names
+        df.rename(columns={
+            "a": "agg_trade_id",
+            "p": "price",
+            "q": "quantity",
+            "f": "first_trade_id",
+            "l": "last_trade_id",
+            "T": "timestamp",
+            "m": "is_buyer_maker",
+            "M": "was_best_price"
+        }, inplace=True)
         
         # Convert data types
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-        numeric_cols = ["id", "price", "quantity", "quote_quantity"]
+        numeric_cols = ["agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id"]
         df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric)
         df["is_buyer_maker"] = df["is_buyer_maker"].astype(bool)
-        df["is_best_match"] = df["is_best_match"].astype(bool)
+        df["was_best_price"] = df["was_best_price"].astype(bool)
         
         return df
     
@@ -126,7 +143,7 @@ class BinanceDataFetcher:
                 break
                 
             # Set from_id for next batch
-            from_id = trades_batch["id"].iloc[-1] + 1
+            from_id = trades_batch["agg_trade_id"].iloc[-1] + 1
         
         if not all_trades:
             return pd.DataFrame()
@@ -148,12 +165,24 @@ class BinanceDataFetcher:
         return trades_df
     
     def fetch_complete_dataset(self, symbol: str, interval: str, 
-                              start_time: datetime, end_time: datetime) -> pd.DataFrame:
-        """Fetch complete dataset with OHLC and trade data"""
+                              start_time: datetime, end_time: datetime,
+                              strict_validation: bool = False) -> pd.DataFrame:
+        """Fetch complete dataset with OHLC and trade data
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTCUSDT')
+            interval: Candle interval (e.g., '1m', '1h', '1d')
+            start_time: Start of data range
+            end_time: End of data range
+            strict_validation: If True, raise exception on validation errors
+            
+        Returns:
+            Combined DataFrame with OHLC and trade data
+        """
         print(f"Fetching data for {symbol} from {start_time} to {end_time}")
         
-        # Calculate number of candles
-        interval_minutes = pd.Timedelta(interval).total_seconds() / 60
+        # Calculate number of candles using interval mapping
+        interval_minutes = self.INTERVAL_MAP.get(interval, 1)  # Default to 1 minute if not found
         total_minutes = (end_time - start_time).total_seconds() / 60
         total_candles = int(total_minutes / interval_minutes)
         
@@ -175,6 +204,8 @@ class BinanceDataFetcher:
             validation_result = self.validator.validate_ohlc(ohlc_df)
             if not validation_result["valid"]:
                 print(f"OHLC validation issues: {validation_result['issues']}")
+                if strict_validation:
+                    raise ValueError(f"OHLC validation failed: {validation_result['issues']}")
             
             # Save to cache
             self.cache_manager.save_ohlc(ohlc_df, symbol, interval, start_time, end_time)
@@ -184,7 +215,7 @@ class BinanceDataFetcher:
         
         for _, candle in ohlc_df.iterrows():
             candle_start = candle["timestamp"]
-            candle_end = candle_start + pd.Timedelta(interval)
+            candle_end = candle_start + timedelta(minutes=interval_minutes)
             
             # Get trades for this candle
             candle_trades = self.process_candle_trades(symbol, candle_start, candle_end)
