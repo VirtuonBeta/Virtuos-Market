@@ -71,3 +71,27 @@ Key Features
 | **Deterministic Cache Paths** | `_get_cache_path()` constructs file paths systematically for OHLC and trades.                                               |
 | **Extensible**                | Can adjust memory cache size, implement retention policies, or add parallel-safe access in future.                          |
 
+ProgressTracker Sub Module
+Overview 
+
+ProgressTracker Module provides real-time tracking of the progress of fetching and processing candles (OHLC) and trades. It supports console output by default and optional Streamlit integration
+
+Key Features
+| Feature | Description |
+|---------|-------------|
+| Candle progress tracking | Tracks the number of candles processed. |
+| Trade progress tracking | Tracks the number of trades fetched. |
+| ETA calculation | Estimates remaining time for both candles and trades using a weighted average. |
+| Output modes | Console (default) or Streamlit progress bars and status messages. |
+| Automatic fallback | Falls back to console if Streamlit is unavailable. |
+| Update interval | Configurable display refresh frequency (default 1 second). |
+| Finish display | Shows total elapsed time upon completion. |
+
+Methods
+| Method                                    | Description                                                   |
+| ----------------------------------------- | ------------------------------------------------------------- |
+| `update_candle_progress(increment=1)`     | Increment the number of processed candles and update display. |
+| `update_trade_progress(increment=1)`      | Increment the number of fetched trades and update display.    |
+| `set_totals(candles_total, trades_total)` | Set the total number of candles and trades to process.        |
+| `_update_display()`                       | Internal method to refresh console or Streamlit display.      |
+| `finish()`                                | Finalize display and show total elapsed time.                 |
