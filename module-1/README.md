@@ -33,3 +33,23 @@ Rolling window: Only requests within the last time_window seconds are counted.
 Safety margin: Prevents hitting exact Binance limits.
 
 Automatic sleep: If the number of requests reaches max_requests, the module waits until requests expire from the window.
+
+
+DataValidator Sub Module
+Overview
+
+The DataValidator module ensures that fetched OHLC and trade data are accurate, complete, and logically consistent.
+It checks for missing columns, invalid timestamps, negative or zero values, logical inconsistencies, extreme volatility, and gaps in time or trade IDs.
+This module is fully interval-agnostic for OHLC data, allowing validation of multiple candle intervals
+
+Key Features
+| Feature                  | Description                                                                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **OHLC Validation**      | Checks for required columns (`timestamp`, `open`, `high`, `low`, `close`, `volume`). Detects invalid timestamps, duplicates, negative prices/volumes, `high < low`, and extreme volatility. |
+| **Trade Validation**     | Checks for required columns (`timestamp`, `price`, `quantity`, `is_buyer_maker`). Detects non-positive prices/quantities and optional trade ID gaps.                                        |
+| **Interval-Agnostic**    | Supports multiple OHLC intervals (`1m`, `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `6h`, `8h`, `12h`, `1d`). Completeness checks adjust dynamically.                                       |
+| **Metrics & Issues**     | Returns structured dictionary: `valid` (bool), `issues` (list of human-readable issues), `metrics` (counts of duplicates, gaps, negative values, extreme volatility, etc.).                 |
+| **Completeness Checks**  | Detects missing or irregular candle intervals for OHLC data and gaps in trade IDs (if present).                                                                                             |
+| **Modular & Extensible** | Can be integrated before caching or processing. Additional checks and thresholds can be added easily.                                                                                       |
+
+
