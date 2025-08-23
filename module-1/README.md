@@ -95,3 +95,25 @@ Methods
 | `set_totals(candles_total, trades_total)` | Set the total number of candles and trades to process.        |
 | `_update_display()`                       | Internal method to refresh console or Streamlit display.      |
 | `finish()`                                | Finalize display and show total elapsed time.                 |
+
+
+BinaceFetcher Sub module
+Overview
+
+Fetches OHLC and trade data from Binance, with caching, validation, and progress tracking.
+
+Key Features
+| Feature                       | Description                                                                                                           |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **OHLC Fetching**             | Fetches candlestick data via Binance `klines` API and converts it to a pandas DataFrame with proper numeric types.    |
+| **Trade Fetching**            | Fetches aggregate trades via Binance `aggTrades` API with pagination and converts to DataFrame.                       |
+| **Batch Processing**          | Handles fetching in batches based on `max_batch_size` until all requested data is retrieved.                          |
+| **Candle-Trade Processing**   | Processes trades per candle, merges with OHLC data, computes bid/ask volumes, and caches results.                     |
+| **Caching**                   | Uses `CacheManager` to store and load OHLC and trade data to reduce API calls.                                        |
+| **Validation**                | Validates OHLC and trade data using `DataValidator`. `strict_validation` option can raise errors if validation fails. |
+| **Progress Tracking**         | Tracks progress of candles and trades using `ProgressTracker`, displaying ETA and completion status.                  |
+| **Retry & Rate Limiting**     | Retries requests up to 3 times and uses `RateLimiter` to avoid API throttling.                                        |
+| **Signed Requests**           | Supports API key/secret for signed endpoints if provided.                                                             |
+| **Complete Dataset Fetching** | Provides `fetch_complete_dataset()` to fetch OHLC and trades for a symbol, interval, and date range.                  |
+| **Interval Handling**         | Maps Binance interval strings to minutes for accurate candle processing.                                              |
+| **Error Handling**            | Optionally raises exceptions on validation errors via `strict_validation`.                                            |
