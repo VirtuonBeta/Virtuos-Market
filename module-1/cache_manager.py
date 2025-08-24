@@ -1,201 +1,248 @@
-# cache_manager.py
+"""
+Storage and caching management for Module 1.
+
+This module handles:
+- In-memory caching with LRU eviction
+- Disk-based persistent caching
+- Cache invalidation and cleanup
+- Performance optimization
+"""
+
 import os
+import json
+import time
+import asyncio
+import aiofiles
 import pandas as pd
 import logging
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
-from datetime import datetime, timezone
+from typing import Any, Optional, Dict, List
+from datetime import datetime, timedelta
 from collections import OrderedDict
-from config import Config
+
+from .config import Config
+from .monitoring.metrics import MetricsCollector
+
+logger = logging.getLogger(__name__)
+
 
 class CacheManager:
+    """
+    Manages data caching for improved performance.
+    
+    Features:
+    - In-memory LRU cache
+    - Disk-based persistent cache
+    - Automatic cleanup
+    - Performance metrics
+    """
+    
     def __init__(self, config: Config):
         self.config = config
+        self.metrics = MetricsCollector(config)
+        
+        # Create cache directory
         os.makedirs(config.cache_dir, exist_ok=True)
         
-        # Initialize in-memory cache with LRU eviction (max 10 items)
-        self._memory_cache = OrderedDict()
-        self._max_cache_size = 10
+        # In-memory cache with LRU eviction
+        self.memory_cache = OrderedDict()
+        self.max_memory_size = config.max_memory_cache_size
         
-        # Set up logging
-        self.logger = logging.getLogger(__name__)
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-            self.logger.setLevel(logging.INFO)
+        # Cache metadata
+        self.cache_index_file = os.path.join(config.cache_dir, "cache_index.json")
+        self.cache_index = self._load_cache_index()
+        
+        # Performance tracking
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+        
+        logger.info(f"Initialized CacheManager with directory {config.cache_dir}")
     
-    def _get_cache_path(self, data_type: str, symbol: str, interval: Optional[str] = None, 
-                       start_time: Optional[datetime] = None, 
-                       end_time: Optional[datetime] = None) -> Path:
-        """Construct cache file path based on parameters"""
-        # Ensure datetime objects are timezone-aware (UTC)
-        if start_time:
-            if start_time.tzinfo is None:
-                start_time = start_time.replace(tzinfo=timezone.utc)
-            else:
-                start_time = start_time.astimezone(timezone.utc)
-                
-        if end_time:
-            if end_time.tzinfo is None:
-                end_time = end_time.replace(tzinfo=timezone.utc)
-            else:
-                end_time = end_time.astimezone(timezone.utc)
+    def _load_cache_index(self) -> Dict[str, Dict[str, Any]]:
+        """Load cache index from disk."""
+        if os.path.exists(self.cache_index_file):
+            try:
+                with open(self.cache_index_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Error loading cache index: {str(e)}")
         
-        if data_type == "ohlc":
-            if start_time and end_time:
-                filename = f"{symbol}_{interval}_{start_time.strftime('%Y%m%d')}_{end_time.strftime('%Y%m%d')}.parquet"
-            else:
-                filename = f"{symbol}_{interval}_latest.parquet"
-        elif data_type == "trades":
-            # For trades, we typically cache per candle
-            candle_time = start_time.strftime('%Y%m%d_%H%M') if start_time else "latest"
-            filename = f"{symbol}_trades_{candle_time}.parquet"
-        else:
-            raise ValueError(f"Unknown data type: {data_type}")
-        
-        return Path(self.config.cache_dir) / filename
+        return {}
     
-    def _add_to_memory_cache(self, key: str, df: pd.DataFrame) -> None:
-        """Add DataFrame to in-memory cache with LRU eviction"""
-        if key in self._memory_cache:
+    def _save_cache_index(self):
+        """Save cache index to disk."""
+        try:
+            with open(self.cache_index_file, 'w') as f:
+                json.dump(self.cache_index, f)
+        except Exception as e:
+            logger.error(f"Error saving cache index: {str(e)}")
+    
+    def _get_cache_path(self, key: str) -> Path:
+        """Get file path for a cache key."""
+        # Use hash to avoid filesystem issues
+        hash_key = str(hash(key))
+        return Path(self.config.cache_dir) / f"{hash_key}.parquet"
+    
+    def _evict_if_needed(self):
+        """Evict items from memory cache if needed."""
+        while len(self.memory_cache) > self.max_memory_size:
+            self.memory_cache.popitem(last=False)
+            self.evictions += 1
+    
+    async def get(self, key: str) -> Optional[Any]:
+        """
+        Get item from cache.
+        
+        Args:
+            key: Cache key
+            
+        Returns:
+            Cached item or None if not found
+        """
+        # Check memory cache first
+        if key in self.memory_cache:
             # Move to end (most recently used)
-            self._memory_cache.pop(key)
-        self._memory_cache[key] = df
+            item = self.memory_cache.pop(key)
+            self.memory_cache[key] = item
+            self.hits += 1
+            self.metrics.record_cache_hit()
+            return item
         
-        # Evict oldest if over size limit
-        if len(self._memory_cache) > self._max_cache_size:
-            self._memory_cache.popitem(last=False)
-    
-    def _get_from_memory_cache(self, key: str) -> Optional[pd.DataFrame]:
-        """Get DataFrame from in-memory cache if available"""
-        if key in self._memory_cache:
-            # Move to end (most recently used)
-            df = self._memory_cache.pop(key)
-            self._memory_cache[key] = df
-            return df
+        # Check disk cache
+        cache_info = self.cache_index.get(key)
+        if cache_info:
+            file_path = Path(cache_info['path'])
+            
+            if file_path.exists():
+                try:
+                    # Check if cache is expired
+                    cached_at = datetime.fromisoformat(cache_info['cached_at'])
+                    if datetime.now() - cached_at > timedelta(days=self.config.cache_expiry_days):
+                        # Cache expired
+                        await self.delete(key)
+                        self.misses += 1
+                        self.metrics.record_cache_miss()
+                        return None
+                    
+                    # Load from disk
+                    if cache_info['type'] == 'dataframe':
+                        df = pd.read_parquet(file_path)
+                        
+                        # Add to memory cache
+                        self.memory_cache[key] = df
+                        self._evict_if_needed()
+                        
+                        self.hits += 1
+                        self.metrics.record_cache_hit()
+                        return df
+                    
+                except Exception as e:
+                    logger.error(f"Error loading from cache: {str(e)}")
+                    await self.delete(key)
+        
+        self.misses += 1
+        self.metrics.record_cache_miss()
         return None
     
-    def save_ohlc(self, df: pd.DataFrame, symbol: str, interval: str, 
-                 start_time: datetime, end_time: datetime) -> None:
-        """Save OHLC data to cache"""
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None):
+        """
+        Set item in cache.
+        
+        Args:
+            key: Cache key
+            value: Value to cache
+            ttl: Time to live in seconds (optional)
+        """
+        # Add to memory cache
+        self.memory_cache[key] = value
+        self._evict_if_needed()
+        
+        # Save to disk
         try:
-            path = self._get_cache_path("ohlc", symbol, interval, start_time, end_time)
+            file_path = self._get_cache_path(key)
             
-            # Add metadata
-            metadata = {
-                'symbol': symbol,
-                'interval': interval,
-                'start_time': start_time.isoformat(),
-                'end_time': end_time.isoformat(),
-                'record_count': len(df),
-                'cache_version': self.config.cache_version,
-                'cached_at': datetime.now(timezone.utc).isoformat()
-            }
-            
-            # Save data and metadata
-            df.to_parquet(path)
-            pd.Series(metadata).to_json(path.with_suffix('.metadata.json'))
-            self.logger.info(f"Saved OHLC data to {path}")
+            if isinstance(value, pd.DataFrame):
+                value.to_parquet(file_path)
+                
+                # Update cache index
+                self.cache_index[key] = {
+                    'path': str(file_path),
+                    'type': 'dataframe',
+                    'cached_at': datetime.now().isoformat(),
+                    'size': len(value),
+                    'ttl': ttl
+                }
+                
+                self._save_cache_index()
+                
         except Exception as e:
-            self.logger.error(f"Error saving OHLC data: {str(e)}")
-            raise
+            logger.error(f"Error saving to cache: {str(e)}")
     
-    def load_ohlc(self, symbol: str, interval: str, 
-                 start_time: datetime, end_time: datetime) -> Optional[pd.DataFrame]:
-        """Load OHLC data from cache if available"""
-        try:
-            path = self._get_cache_path("ohlc", symbol, interval, start_time, end_time)
-            cache_key = str(path)
+    async def delete(self, key: str):
+        """Delete item from cache."""
+        # Remove from memory
+        if key in self.memory_cache:
+            del self.memory_cache[key]
+        
+        # Remove from disk
+        cache_info = self.cache_index.get(key)
+        if cache_info:
+            file_path = Path(cache_info['path'])
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+            except Exception as e:
+                logger.error(f"Error deleting cache file: {str(e)}")
             
-            # Check in-memory cache first
-            cached_df = self._get_from_memory_cache(cache_key)
-            if cached_df is not None:
-                return cached_df
-            
-            if not path.exists():
-                return None
-            
-            # Check metadata
-            metadata_path = path.with_suffix('.metadata.json')
-            if not metadata_path.exists():
-                return None
-            
-            metadata = pd.read_json(metadata_path, typ='series')
-            
-            # Verify cache version
-            if metadata.get('cache_version') != self.config.cache_version:
-                self.logger.warning(f"Cache version mismatch for {path}")
-                return None
-            
-            # Verify date range
-            cached_start = datetime.fromisoformat(metadata['start_time'])
-            cached_end = datetime.fromisoformat(metadata['end_time'])
-            
-            if cached_start > start_time or cached_end < end_time:
-                return None
-            
-            df = pd.read_parquet(path)
-            # Add to in-memory cache
-            self._add_to_memory_cache(cache_key, df)
-            return df
-        except Exception as e:
-            self.logger.error(f"Error loading OHLC data: {str(e)}")
-            return None
+            # Remove from index
+            del self.cache_index[key]
+            self._save_cache_index()
     
-    def save_trades(self, df: pd.DataFrame, symbol: str, candle_time: datetime) -> None:
-        """Save trades data to cache"""
+    async def clear(self):
+        """Clear all cache."""
+        # Clear memory
+        self.memory_cache.clear()
+        
+        # Clear disk
         try:
-            path = self._get_cache_path("trades", symbol, start_time=candle_time)
+            for file_path in Path(self.config.cache_dir).glob("*.parquet"):
+                file_path.unlink()
             
-            # Add metadata
-            metadata = {
-                'symbol': symbol,
-                'candle_time': candle_time.isoformat(),
-                'record_count': len(df),
-                'cache_version': self.config.cache_version,
-                'cached_at': datetime.now(timezone.utc).isoformat()
-            }
+            # Clear index
+            self.cache_index = {}
+            self._save_cache_index()
             
-            # Save data and metadata
-            df.to_parquet(path)
-            pd.Series(metadata).to_json(path.with_suffix('.metadata.json'))
-            self.logger.info(f"Saved trades data to {path}")
+            logger.info("Cleared all cache")
+            
         except Exception as e:
-            self.logger.error(f"Error saving trades data: {str(e)}")
-            raise
+            logger.error(f"Error clearing cache: {str(e)}")
     
-    def load_trades(self, symbol: str, candle_time: datetime) -> Optional[pd.DataFrame]:
-        """Load trades data from cache if available"""
-        try:
-            path = self._get_cache_path("trades", symbol, start_time=candle_time)
-            cache_key = str(path)
-            
-            # Check in-memory cache first
-            cached_df = self._get_from_memory_cache(cache_key)
-            if cached_df is not None:
-                return cached_df
-            
-            if not path.exists():
-                return None
-            
-            # Check metadata
-            metadata_path = path.with_suffix('.metadata.json')
-            if not metadata_path.exists():
-                return None
-            
-            metadata = pd.read_json(metadata_path, typ='series')
-            
-            # Verify cache version
-            if metadata.get('cache_version') != self.config.cache_version:
-                self.logger.warning(f"Cache version mismatch for {path}")
-                return None
-            
-            df = pd.read_parquet(path)
-            # Add to in-memory cache
-            self._add_to_memory_cache(cache_key, df)
-            return df
-        except Exception as e:
-            self.logger.error(f"Error loading trades data: {str(e)}")
-            return None
+    async def cleanup_expired(self):
+        """Clean up expired cache entries."""
+        expired_keys = []
+        
+        for key, info in self.cache_index.items():
+            cached_at = datetime.fromisoformat(info['cached_at'])
+            if datetime.now() - cached_at > timedelta(days=self.config.cache_expiry_days):
+                expired_keys.append(key)
+        
+        for key in expired_keys:
+            await self.delete(key)
+        
+        logger.info(f"Cleaned up {len(expired_keys)} expired cache entries")
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get cache performance metrics."""
+        total_requests = self.hits + self.misses
+        hit_rate = (self.hits / total_requests * 100) if total_requests > 0 else 0
+        
+        return {
+            "memory_usage": len(self.memory_cache),
+            "memory_capacity": self.max_memory_size,
+            "disk_entries": len(self.cache_index),
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": hit_rate,
+            "evictions": self.evictions
+        }
